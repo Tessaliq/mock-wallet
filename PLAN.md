@@ -39,18 +39,17 @@ Same credential reused across N verifier sessions, with device binding via WebCr
 
 ## Phase breakdown
 
-### MW0 — Technical scoping + bootstrap (0.5 day)
+### MW0 — Technical scoping + bootstrap (0.5 day) ✅ DONE 2026-05-12
 
-- [ ] Verify whether `@owf/mdoc` (v0.6.x, currently used on the Tessaliq API side) is browser-compatible
-  - If yes: use directly
-  - If no: choose between (a) fork + port a browser bundle, (b) re-implement the mdoc subset needed for credential presentation using `cbor-web` or `@cborg/json`
-- [ ] Initialise the project with Vite + React + TypeScript template
-- [ ] Add Tailwind, shadcn/ui, jose, `@yudiel/react-qr-scanner` deps
-- [ ] Configure PWA manifest + minimal service worker
-- [ ] Set up the new Vercel project, point `wallet-demo.tessaliq.com` to it (DNS via Infomaniak)
-- [ ] Build local works, deploy hello-world to staging URL
+- [x] Verify whether `@owf/mdoc` (v0.6.x, currently used on the Tessaliq API side) is browser-compatible
+  - **Result: OK.** ESM-only distribution, zero node-only imports, runtime deps (`cbor-x`, `zod`, `zod-validation-error`) all browser-compat. Used directly.
+- [x] Initialise the project with Vite + React + TypeScript template
+- [x] Add Tailwind, jose deps. (shadcn/ui + `@yudiel/react-qr-scanner` deferred to MW2/MW3 when actually needed.)
+- [x] Configure PWA manifest + minimal service worker via `vite-plugin-pwa`
+- [x] Set up the new Vercel project, point `wallet-demo.tessaliq.com` to it (DNS via Infomaniak CNAME → cname.vercel-dns.com)
+- [x] Build local works (vite 593 ms, 195 kB JS gzip 61 kB, PWA SW generated), deploy hello-world to `https://wallet-demo.tessaliq.com` confirmed live
 
-**Output:** project bootstrapped, deploys, can be loaded from `wallet-demo.tessaliq.com`. Risk on `@owf/mdoc` resolved.
+**Output:** project bootstrapped, deploys, loaded from `wallet-demo.tessaliq.com`. Risk on `@owf/mdoc` resolved.
 
 ### MW1 — Device key + storage (0.5 day)
 
