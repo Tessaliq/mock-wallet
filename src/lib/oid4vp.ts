@@ -21,6 +21,9 @@
 // parse the request and drive the consent UI.
 
 import { decodeJwt } from 'jose'
+import { SessionTranscript } from '@owf/mdoc'
+import { getOrCreateDeviceKey } from './device-key.ts'
+import { createWalletMdocContext } from './mdoc-context.ts'
 import type { StoredCredential } from './storage.ts'
 
 export type OpenId4VpRequest = {
@@ -182,25 +185,74 @@ export function matchCredentialsAgainstQuery(
 }
 
 /**
- * Stub. The full implementation needs:
- *   1. SessionTranscript.forOid4Vp({ clientId, responseUri, nonce }, ctx)
- *   2. A DeviceResponse built from the selected IssuerSigned + a DeviceSigned
- *      signed by the WebCrypto device key over the session transcript bytes.
- *   3. POST direct_post to `responseUri` with vp_token=<base64url-CBOR DeviceResponse>
- *      and state echoed back.
+ * Build the OID4VP SessionTranscript bytes for this presentation request.
  *
- * Blocking item: an MdocContext implementation that wraps WebCrypto so the
- * `Holder.createDeviceResponseForDeviceRequest` (or equivalent
- * DeviceSignedBuilder) can sign with the non-extractable device private key.
- * This adapter is the next focused chunk of work before MW4 E2E.
+ * The SessionTranscript binds the authorization request (clientId,
+ * responseUri, nonce) to the device-signed payload — without it, a malicious
+ * verifier could replay a presentation against a different audience.
+ */
+export async function buildSessionTranscript(
+  request: OpenId4VpRequest,
+): Promise<SessionTranscript> {
+  const { privateKey } = await getOrCreateDeviceKey()
+  const ctx = createWalletMdocContext(privateKey)
+  return await SessionTranscript.forOid4Vp(
+    {
+      clientId: request.clientId,
+      responseUri: request.responseUri,
+      nonce: request.nonce,
+      // jwkThumbprint is only required when the verifier requested an
+      // encrypted response. For V1 direct_post (unencrypted) it is omitted.
+    },
+    ctx,
+  )
+}
+
+/**
+ * Build and POST an OID4VP presentation. **NOT YET WIRED IN V1.**
+ *
+ * Status: the SessionTranscript and the WebCrypto MdocContext adapter are in
+ * place. What remains is the construction of the mdoc `DeviceResponse` and
+ * the actual POST to `direct_post`. The `@owf/mdoc` API offers two paths:
+ *
+ *   (a) `DeviceSignedBuilder` — needs a `derCertificate` (DER-encoded X.509
+ *       certificate for the device public key). We need to either:
+ *         - have the mock wallet self-sign a throwaway certificate for its
+ *           device key at first boot (additional ~80 lines of code using
+ *           @peculiar/x509 or a hand-rolled minimal cert), OR
+ *         - patch the builder to accept presentations without a
+ *           derCertificate when the verifier trusts the MSO-embedded
+ *           DeviceKey directly (more invasive; would require a forked
+ *           builder).
+ *
+ *   (b) Build `DeviceSigned` manually using `DeviceSignature.create()` +
+ *       `DeviceAuthentication` CBOR encoding. More work but does not require
+ *       a cert.
+ *
+ * The pragmatic next step is (a) with a hand-rolled self-signed cert, since
+ * the Tessaliq verifier (and most OID4VP verifiers) primarily check the MSO
+ * `deviceKeyInfo` and only need the cert for protocol bookkeeping.
+ *
+ * Once the DeviceResponse is built, the POST is straightforward:
+ *
+ *   POST {request.responseUri}
+ *   Content-Type: application/x-www-form-urlencoded
+ *   Body: vp_token={base64url(CBOR DeviceResponse)}&state={request.state}
  */
 export async function buildAndPostPresentation(
-  _request: OpenId4VpRequest,
+  request: OpenId4VpRequest,
   _credential: StoredCredential,
-): Promise<{ status: 'not_implemented_yet'; reason: string }> {
+): Promise<{ status: 'not_implemented_yet'; sessionTranscriptReady: true; reason: string }> {
+  // Validate that we can at least build the SessionTranscript end-to-end —
+  // this exercises the WebCrypto MdocContext adapter.
+  await buildSessionTranscript(request)
   return {
     status: 'not_implemented_yet',
+    sessionTranscriptReady: true,
     reason:
-      'mdoc DeviceResponse signing requires a WebCrypto MdocContext adapter. Pending implementation before MW4.',
+      'SessionTranscript and WebCrypto MdocContext adapter are in place. ' +
+      'Remaining work: build DeviceResponse (decision pending between ' +
+      'DeviceSignedBuilder with a self-signed cert vs. manual ' +
+      'DeviceAuthentication CBOR encoding) and POST direct_post.',
   }
 }
