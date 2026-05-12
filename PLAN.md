@@ -51,27 +51,13 @@ Same credential reused across N verifier sessions, with device binding via WebCr
 
 **Output:** project bootstrapped, deploys, loaded from `wallet-demo.tessaliq.com`. Risk on `@owf/mdoc` resolved.
 
-### MW1 — Device key + storage (0.5 day)
+### MW1 — Device key + storage (0.5 day) ✅ DONE 2026-05-12
 
-- [ ] `src/lib/device-key.ts` — `generateOrLoadDeviceKey()` returns a P-256 ECDSA CryptoKey pair, non-extractable, persisted across sessions (IndexedDB stores the CryptoKey handle directly via `structuredClone`)
-- [ ] `src/lib/storage.ts` — IndexedDB schema for credentials:
-  ```ts
-  type StoredCredential = {
-    id: string
-    format: 'mdoc'
-    namespace: string             // e.g. 'eu.europa.ec.av.1'
-    rawBytes: Uint8Array          // the full IssuerSigned mdoc
-    claims: Record<string, unknown>
-    issuerCertSubject: string
-    issuedAt: Date
-    expiresAt: Date | null
-    statusListUri: string | null
-    statusListIndex: number | null
-  }
-  ```
-- [ ] Test page: show the device key public JWK, list stored credentials (empty at first)
+- [x] `src/lib/device-key.ts` — `getOrCreateDeviceKey()` returns a P-256 ECDSA CryptoKey pair, non-extractable, persisted across sessions
+- [x] `src/lib/storage.ts` — IndexedDB schema (`keys` + `credentials` stores), `StoredCredential` type, helpers `listCredentials`, `putCredential`, `deleteCredential`
+- [x] Test page: shows the device key public JWK + RFC 7638 thumbprint, lists stored credentials
 
-**Output:** device key persists across page reloads, IndexedDB schema ready.
+**Output:** device key persists across page reloads, IndexedDB schema ready. Commit `5096ca5`.
 
 ### MW2 — OID4VCI reception flow (1.5 days)
 
