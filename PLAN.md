@@ -96,7 +96,27 @@ Same credential reused across N verifier sessions, with device binding via WebCr
 
 **Output:** `mock wallet → Tessaliq Verifier` end-to-end. Selective disclosure validated through the existing MSO digests. Build passes (`pnpm build` 4 s, 808 kB JS gzip 213 kB).
 
-### MW4 — End-to-end test + revocation (0.5 day)
+### MW4 — End-to-end test + revocation (0.5 day) — IN PROGRESS
+
+**OID4VCI half: VALIDATED 2026-05-13** via a node smoke-test that mirrors
+the wallet code (jose ES256, same headers, same params) against the live
+`api-staging.tessaliq.com`:
+
+- `POST /v1/test-helpers/oidf-credential-offer` → offer with `tx_code=1234`
+- `POST /v1/credential/token` with `client_assertion_type` +
+  `client_assertion` (`private_key_jwt` per OIDF HAIP) + `tx_code` →
+  `access_token` + `c_nonce` OK
+- `POST /v1/credential/issue` with `proof.jwt` (`openid4vci-proof+jwt`) →
+  mdoc credential (1458 bytes base64url, `notification_id` returned) OK
+
+The wallet code (`src/lib/oid4vci.ts` + `src/lib/proof-jwt.ts`) follows the
+same recipe, so the browser path should succeed identically. Outstanding:
+manual UI smoke test once the Vercel deploy lands.
+
+**OID4VP half: NOT YET VALIDATED** end-to-end. Code is in place
+(`src/lib/oid4vp.ts buildAndPostPresentation`) but not exercised against
+the verifier. Risk: CBOR round-trip of filtered `IssuerSignedItem` (see
+README §Known gaps).
 
 - [ ] Reproducible E2E test scenario:
   1. Trigger a verifier session on Tessaliq → wallet presents the user's PID France Identité (simulated) → Tessaliq issues a derived AV credential offer
