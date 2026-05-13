@@ -47,6 +47,12 @@ export type StoredKeyEntry = {
   privateKey: CryptoKey
   publicKey: CryptoKey
   createdAt: Date
+  // Self-signed DER-encoded X.509 certificate for the device public key.
+  // Populated lazily by device-cert.ts the first time a presentation needs it.
+  // @owf/mdoc's DeviceSignedBuilder embeds this in the COSE_Sign1 x5chain
+  // unprotected header (RFC 9360). The verifier reads it for protocol
+  // bookkeeping; trust is established via the MSO deviceKeyInfo.
+  certDer?: Uint8Array
 }
 
 interface MockWalletDB extends DBSchema {

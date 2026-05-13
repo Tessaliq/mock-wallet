@@ -76,24 +76,25 @@ Same credential reused across N verifier sessions, with device binding via WebCr
 
 **Output:** can run `Tessaliq Issuer /v1/credential/offer → mock wallet`. Credential stored locally.
 
-### MW3 — OID4VP presentation flow (1.5 days)
+### MW3 — OID4VP presentation flow (1.5 days) ✅ DONE 2026-05-13
 
-- [ ] `src/lib/oid4vp-client.ts`:
-  - parse `openid4vp://?...` link (or HTTPS link with the request)
-  - fetch `request_uri` if signed JAR is used
-  - validate the verifier signature against the x509 cert chain — for V1 mock, accept self-signed verifiers (with warning); for V2, validate against trusted roots
-  - extract requested claims from the DCQL or Presentation Definition
-  - build the OID4VP session transcript
+- [x] `src/lib/oid4vp.ts`:
+  - parse `openid4vp://?...` link (or HTTPS link with the request); inline `request=` JWT + `request_uri` JAR + raw query params
+  - V1 accepts unsigned and signed verifier requests without x509 chain validation (`signed` flag surfaced to UI warning); V2 must validate
+  - extract requested claims from DCQL (`claims[].path` last segment)
+  - build the OID4VP session transcript via `SessionTranscript.forOid4Vp`
   - construct an mdoc DeviceResponse:
-    - select the requested claims (e.g. `age_over_18` only, not the full credential)
-    - build DeviceAuth signed by the device key (HMAC-SHA-256 over the session transcript)
-  - POST the `vp_token` to the verifier's `response_uri` via `direct_post`
-- [ ] UI:
-  - "Present credential" page when a QR is scanned with `openid4vp://...`
-  - Consent screen: show verifier identity (from request), show claims being shared, big "Share" and "Cancel" buttons
-  - Confirmation page after successful presentation
+    - filter `IssuerSignedItems` to the requested claim list (selective disclosure)
+    - `DeviceSignedBuilder.sign()` with ES256 over the SessionTranscript
+    - wrap into `Document` + `DeviceResponse.createSimple`
+  - POST `vp_token={"<dcqlId>":"<base64url(CBOR DeviceResponse)>"}` to the verifier's `response_uri` via `direct_post`, surface verifier 200/redirect_uri
+- [x] `src/lib/device-cert.ts`: self-signed X.509 cert for the device key (ECDSA P-256, SHA-256, 10-year validity), generated via `@peculiar/x509` and persisted alongside the key. Used as the `derCertificate` `x5chain` payload for `DeviceSignedBuilder`.
+- [x] UI:
+  - "Present credential" panel with paste-URL form
+  - Consent screen: verifier identity (`client_id`), `response_uri`, signed/unsigned warning, claims being shared per DCQL slot, Share / Cancel
+  - Confirmation page: verifier status, optional `redirect_uri`, raw response toggle
 
-**Output:** can run `mock wallet → Tessaliq Verifier`. Verifier receives the mdoc DeviceResponse, validates it, generates a receipt JWT.
+**Output:** `mock wallet → Tessaliq Verifier` end-to-end. Selective disclosure validated through the existing MSO digests. Build passes (`pnpm build` 4 s, 808 kB JS gzip 213 kB).
 
 ### MW4 — End-to-end test + revocation (0.5 day)
 

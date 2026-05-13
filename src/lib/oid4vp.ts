@@ -3,26 +3,31 @@
 // V1 scope: `direct_post` response mode only, mdoc credentials only.
 // Encrypted response (`direct_post.jwt`, DC API + HPKE) is deferred to V2.
 //
-// Three things this module does in V1:
+// What this module does:
 //   1. Parse an `openid4vp://` (or HTTPS) link into a structured request.
 //   2. Resolve the Authorization Request: either inline (`request`) or fetched
-//      (`request_uri`). For V1, signature validation of the request JAR is
-//      best-effort — we accept self-signed verifiers and surface a warning
-//      in the UI. Production wallets MUST validate the x509 chain.
+//      (`request_uri`). V1 does not validate the JAR x509 chain — production
+//      wallets MUST. We surface the `signed` flag so the UI can warn.
 //   3. Match stored credentials against the DCQL query and surface the
 //      selection to the user.
-//
-// **NOT YET WIRED IN V1**: the actual mdoc DeviceResponse construction +
-// signing + POST to direct_post. The `@owf/mdoc` API exposes the right
-// primitives (`SessionTranscript.forOid4Vp`, `Holder.createDeviceResponseForDeviceRequest`,
-// `DeviceSignedBuilder`) but they require an `MdocContext` (`cose`, `crypto`,
-// `x509`) that needs a thin WebCrypto adapter. Adapter + presentation flow
-// will land in a follow-up commit before MW4. The current code is enough to
-// parse the request and drive the consent UI.
+//   4. Build a filtered mdoc DeviceResponse (selective disclosure), sign the
+//      DeviceAuth with the device key via WebCrypto, and POST `vp_token` to
+//      the verifier's `response_uri`.
 
 import { decodeJwt } from 'jose'
-import { SessionTranscript } from '@owf/mdoc'
-import { getOrCreateDeviceKey } from './device-key.ts'
+import {
+  CoseKey,
+  Document,
+  DeviceResponse,
+  DeviceSignedBuilder,
+  IssuerNamespaces,
+  IssuerSigned,
+  SessionTranscript,
+  SignatureAlgorithm,
+  base64url,
+} from '@owf/mdoc'
+import { getDevicePublicJwk, getOrCreateDeviceKey } from './device-key.ts'
+import { getOrCreateDeviceCertB64 } from './device-cert.ts'
 import { createWalletMdocContext } from './mdoc-context.ts'
 import type { StoredCredential } from './storage.ts'
 
@@ -159,7 +164,6 @@ export function matchCredentialsAgainstQuery(
   stored: StoredCredential[],
 ): CredentialMatch[] {
   if (!query) {
-    // No DCQL — accept all stored credentials as candidates for a single slot.
     return [
       {
         dcqlId: 'default',
@@ -209,50 +213,140 @@ export async function buildSessionTranscript(
 }
 
 /**
- * Build and POST an OID4VP presentation. **NOT YET WIRED IN V1.**
+ * Build a filtered IssuerSigned that contains only the requested claims.
  *
- * Status: the SessionTranscript and the WebCrypto MdocContext adapter are in
- * place. What remains is the construction of the mdoc `DeviceResponse` and
- * the actual POST to `direct_post`. The `@owf/mdoc` API offers two paths:
+ * Selective disclosure: rather than send all attributes the issuer stamped
+ * into the credential, we keep only those listed in `keep`. The IssuerAuth
+ * (MSO + signature) remains unchanged — the verifier matches the disclosed
+ * items against the digests embedded in the MSO and rejects anything that
+ * doesn't match. If `keep` is empty, all items are sent (no filter).
+ */
+function filterIssuerSigned(
+  original: IssuerSigned,
+  namespace: string,
+  keep: string[],
+): IssuerSigned {
+  if (keep.length === 0) return original
+  const keepSet = new Set(keep)
+  const items = original.getIssuerNamespace(namespace) ?? []
+  const filteredItems = items.filter((i) => keepSet.has(i.elementIdentifier))
+  const nsMap = new Map([[namespace, filteredItems]])
+  // Copy any other namespaces (V1 wallets only have one, but be permissive).
+  for (const [ns, nsItems] of original.issuerNamespaces.issuerNamespaces) {
+    if (ns !== namespace) nsMap.set(ns, nsItems)
+  }
+  return IssuerSigned.create({
+    issuerNamespaces: IssuerNamespaces.create({ issuerNamespaces: nsMap }),
+    issuerAuth: original.issuerAuth,
+  })
+}
+
+export type PresentationResult = {
+  status: number
+  body: string
+  /** `redirect_uri` returned by the verifier in the JSON response, if any. */
+  redirectUri?: string
+}
+
+/**
+ * Build and POST an OID4VP presentation for the chosen credential.
  *
- *   (a) `DeviceSignedBuilder` — needs a `derCertificate` (DER-encoded X.509
- *       certificate for the device public key). We need to either:
- *         - have the mock wallet self-sign a throwaway certificate for its
- *           device key at first boot (additional ~80 lines of code using
- *           @peculiar/x509 or a hand-rolled minimal cert), OR
- *         - patch the builder to accept presentations without a
- *           derCertificate when the verifier trusts the MSO-embedded
- *           DeviceKey directly (more invasive; would require a forked
- *           builder).
- *
- *   (b) Build `DeviceSigned` manually using `DeviceSignature.create()` +
- *       `DeviceAuthentication` CBOR encoding. More work but does not require
- *       a cert.
- *
- * The pragmatic next step is (a) with a hand-rolled self-signed cert, since
- * the Tessaliq verifier (and most OID4VP verifiers) primarily check the MSO
- * `deviceKeyInfo` and only need the cert for protocol bookkeeping.
- *
- * Once the DeviceResponse is built, the POST is straightforward:
- *
- *   POST {request.responseUri}
- *   Content-Type: application/x-www-form-urlencoded
- *   Body: vp_token={base64url(CBOR DeviceResponse)}&state={request.state}
+ * Flow:
+ *   1. Reconstruct the IssuerSigned from the stored CBOR bytes.
+ *   2. Filter the disclosed items down to `requestedClaims` (selective
+ *      disclosure). Verifier checks them against MSO digests; trust survives.
+ *   3. Build the SessionTranscript that binds clientId/responseUri/nonce.
+ *   4. Use DeviceSignedBuilder to sign the DeviceAuth with the device key.
+ *      DeviceNamespaces is empty in V1 — all attributes live in IssuerSigned.
+ *   5. Assemble Document + DeviceResponse (one document, V1).
+ *   6. POST `vp_token` (DCQL response shape) + `state` to `response_uri`.
  */
 export async function buildAndPostPresentation(
   request: OpenId4VpRequest,
-  _credential: StoredCredential,
-): Promise<{ status: 'not_implemented_yet'; sessionTranscriptReady: true; reason: string }> {
-  // Validate that we can at least build the SessionTranscript end-to-end —
-  // this exercises the WebCrypto MdocContext adapter.
-  await buildSessionTranscript(request)
-  return {
-    status: 'not_implemented_yet',
-    sessionTranscriptReady: true,
-    reason:
-      'SessionTranscript and WebCrypto MdocContext adapter are in place. ' +
-      'Remaining work: build DeviceResponse (decision pending between ' +
-      'DeviceSignedBuilder with a self-signed cert vs. manual ' +
-      'DeviceAuthentication CBOR encoding) and POST direct_post.',
+  credential: StoredCredential,
+  requestedClaims: string[],
+  dcqlId: string,
+): Promise<PresentationResult> {
+  if (request.responseMode !== 'direct_post') {
+    throw new Error(
+      `Response mode ${request.responseMode} is not supported in V1 (direct_post only).`,
+    )
   }
+
+  const { privateKey } = await getOrCreateDeviceKey()
+  const ctx = createWalletMdocContext(privateKey)
+
+  const issuerSignedFull = IssuerSigned.fromEncodedForOid4Vci(
+    base64url.encode(credential.rawBytes),
+  )
+  const issuerSigned = filterIssuerSigned(
+    issuerSignedFull,
+    credential.namespace,
+    requestedClaims,
+  )
+
+  const sessionTranscript = await SessionTranscript.forOid4Vp(
+    {
+      clientId: request.clientId,
+      responseUri: request.responseUri,
+      nonce: request.nonce,
+    },
+    ctx,
+  )
+
+  // signingKey is a public-only CoseKey — the actual signing is done by the
+  // WebCrypto MdocContext adapter (which holds the non-extractable private
+  // key in closure).
+  const publicJwk = await getDevicePublicJwk()
+  const signingKey = CoseKey.fromJwk(publicJwk as Record<string, unknown>)
+  const derCertificate = await getOrCreateDeviceCertB64()
+
+  // V1 docType equals the namespace for the EU AV blueprint
+  // (`eu.europa.ec.av.1`). If we ever support multi-namespace credentials,
+  // docType must be stored separately.
+  const docType = credential.namespace
+
+  const deviceSigned = await new DeviceSignedBuilder(docType, ctx).sign({
+    signingKey,
+    algorithm: SignatureAlgorithm.ES256,
+    sessionTranscript,
+    derCertificate,
+  })
+
+  const document = Document.create({
+    docType,
+    issuerSigned,
+    deviceSigned,
+  })
+
+  const deviceResponse = DeviceResponse.createSimple({
+    documents: [document],
+    status: 0,
+  })
+
+  const vpTokenValue = deviceResponse.encodedForOid4Vp
+  const vpToken = JSON.stringify({ [dcqlId]: vpTokenValue })
+
+  const body = new URLSearchParams()
+  body.set('vp_token', vpToken)
+  if (request.state) body.set('state', request.state)
+
+  const resp = await fetch(request.responseUri, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body,
+  })
+  const text = await resp.text().catch(() => '')
+  if (!resp.ok) {
+    throw new Error(`Verifier ${resp.status} on response_uri: ${text || resp.statusText}`)
+  }
+  let redirectUri: string | undefined
+  try {
+    const parsed = JSON.parse(text) as { redirect_uri?: unknown }
+    if (typeof parsed.redirect_uri === 'string') redirectUri = parsed.redirect_uri
+  } catch {
+    // Verifier may return an empty 200 or non-JSON — that's fine.
+  }
+  return { status: resp.status, body: text, redirectUri }
 }
+
