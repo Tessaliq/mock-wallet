@@ -4,7 +4,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getDevicePublicJwk, getDeviceKeyThumbprint } from './lib/device-key.ts'
 import { listCredentials, type StoredCredential } from './lib/storage.ts'
-import { acceptCredentialOffer } from './lib/oid4vci.ts'
+import {
+  acceptCredentialOffer,
+  parseCredentialOffer,
+  type CredentialOffer,
+} from './lib/oid4vci.ts'
 import {
   buildAndPostPresentation,
   matchCredentialsAgainstQuery,
@@ -435,14 +439,42 @@ function AddCredentialModal({
   onAdded: () => void
 }) {
   const [url, setUrl] = useState('')
+  const [offer, setOffer] = useState<CredentialOffer | null>(null)
+  const [txCode, setTxCode] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  async function submit() {
+  const txCodeMeta =
+    offer?.grants['urn:ietf:params:oauth:grant-type:pre-authorized_code']
+      ?.tx_code
+
+  async function parse() {
     setSubmitting(true)
     setError(null)
     try {
-      await acceptCredentialOffer(url)
+      const parsed = await parseCredentialOffer(url)
+      setOffer(parsed)
+      // If no tx_code is required, run the full flow immediately.
+      const needsTx = !!parsed.grants[
+        'urn:ietf:params:oauth:grant-type:pre-authorized_code'
+      ]?.tx_code
+      if (!needsTx) {
+        await acceptCredentialOffer(url, {})
+        onAdded()
+        return
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  async function submitWithPin() {
+    setSubmitting(true)
+    setError(null)
+    try {
+      await acceptCredentialOffer(url, { txCode })
       onAdded()
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -454,23 +486,55 @@ function AddCredentialModal({
     <div className="fixed inset-0 z-10 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-lg rounded-lg bg-white p-6 shadow-xl">
         <h3 className="text-lg font-semibold">Add credential</h3>
-        <p className="mt-1 text-sm text-neutral-600">
-          Paste an{' '}
-          <code className="rounded bg-neutral-100 px-1">
-            openid-credential-offer://
-          </code>{' '}
-          URL.
-        </p>
-        <textarea
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          placeholder="openid-credential-offer://?credential_offer=..."
-          rows={4}
-          className="mt-3 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-xs"
-        />
+
+        {!offer && (
+          <>
+            <p className="mt-1 text-sm text-neutral-600">
+              Paste an{' '}
+              <code className="rounded bg-neutral-100 px-1">
+                openid-credential-offer://
+              </code>{' '}
+              URL.
+            </p>
+            <textarea
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="openid-credential-offer://?credential_offer=..."
+              rows={4}
+              className="mt-3 w-full rounded border border-neutral-300 px-3 py-2 font-mono text-xs"
+            />
+          </>
+        )}
+
+        {offer && txCodeMeta && (
+          <div className="mt-3 space-y-3">
+            <div className="rounded border border-neutral-200 bg-neutral-50 p-3 text-sm">
+              <p className="text-xs font-medium uppercase tracking-wide text-neutral-500">
+                Issuer
+              </p>
+              <p className="mt-1 font-mono text-xs break-all">
+                {offer.credential_issuer}
+              </p>
+              <p className="mt-2 text-xs text-neutral-600">
+                {txCodeMeta.description ??
+                  'The issuer asked for a transaction code (PIN).'}
+              </p>
+            </div>
+            <input
+              value={txCode}
+              onChange={(e) => setTxCode(e.target.value)}
+              placeholder={`PIN (${txCodeMeta.length ?? '?'} digits)`}
+              inputMode={txCodeMeta.input_mode === 'numeric' ? 'numeric' : 'text'}
+              maxLength={txCodeMeta.length}
+              className="w-full rounded border border-neutral-300 px-3 py-2 font-mono"
+            />
+          </div>
+        )}
+
         {error && (
           <p className="mt-2 text-sm text-rose-600 break-all">{error}</p>
         )}
+
         <div className="mt-4 flex justify-end gap-2">
           <button
             type="button"
@@ -480,14 +544,26 @@ function AddCredentialModal({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={!url.trim() || submitting}
-            className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
-          >
-            {submitting ? 'Receiving…' : 'Receive credential'}
-          </button>
+          {!offer && (
+            <button
+              type="button"
+              onClick={() => void parse()}
+              disabled={!url.trim() || submitting}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {submitting ? 'Working…' : 'Continue'}
+            </button>
+          )}
+          {offer && txCodeMeta && (
+            <button
+              type="button"
+              onClick={() => void submitWithPin()}
+              disabled={!txCode.trim() || submitting}
+              className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+            >
+              {submitting ? 'Receiving…' : 'Receive credential'}
+            </button>
+          )}
         </div>
       </div>
     </div>

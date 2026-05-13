@@ -12,8 +12,11 @@
 //   6. Persist in IndexedDB
 
 import { base64url, IssuerSigned } from '@owf/mdoc'
-import { buildProofJwt } from './proof-jwt.ts'
+import { buildClientAssertion, buildProofJwt } from './proof-jwt.ts'
 import { putCredential, type StoredCredential } from './storage.ts'
+
+const CLIENT_ASSERTION_TYPE =
+  'urn:ietf:params:oauth:client-assertion-type:jwt-bearer'
 
 export type CredentialOffer = {
   credential_issuer: string
@@ -93,14 +96,37 @@ export async function fetchIssuerMetadata(credentialIssuer: string): Promise<Iss
   return (await resp.json()) as IssuerMetadata
 }
 
+export type RequestTokenParams = {
+  preAuthorizedCode: string
+  /** PIN-style transaction code, when the offer's `tx_code` block requires it. */
+  txCode?: string
+  /** Issuer base URL — used as the audience of the client_assertion JWT. */
+  audience: string
+}
+
+/**
+ * Exchange the pre-authorized code for an access_token + c_nonce.
+ *
+ * The Tessaliq issuer (and any HAIP-aligned issuer) requires
+ * `private_key_jwt` client authentication — we sign a `client_assertion`
+ * JWT with the device key, with the public JWK inline in the header so
+ * the issuer can verify without prior client registration.
+ */
 export async function requestToken(
   tokenEndpoint: string,
-  preAuthorizedCode: string,
+  params: RequestTokenParams,
 ): Promise<TokenResponse> {
+  const clientAssertion = await buildClientAssertion([
+    params.audience,
+    tokenEndpoint,
+  ])
   const body = new URLSearchParams({
     grant_type: PRE_AUTH_GRANT_TYPE,
-    'pre-authorized_code': preAuthorizedCode,
+    'pre-authorized_code': params.preAuthorizedCode,
+    client_assertion_type: CLIENT_ASSERTION_TYPE,
+    client_assertion: clientAssertion,
   })
+  if (params.txCode) body.set('tx_code', params.txCode)
   const resp = await fetch(tokenEndpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -163,15 +189,26 @@ function extractClaims(credentialBase64: string): {
   }
 }
 
+export type AcceptCredentialOfferParams = {
+  /** PIN entered by the user when the offer requires `tx_code`. */
+  txCode?: string
+}
+
 /**
  * High-level helper: run the full pre-authorized OID4VCI flow against an
  * offer, persist the credential, and return it.
  */
-export async function acceptCredentialOffer(rawOfferUrl: string): Promise<StoredCredential> {
+export async function acceptCredentialOffer(
+  rawOfferUrl: string,
+  params: AcceptCredentialOfferParams = {},
+): Promise<StoredCredential> {
   const offer = await parseCredentialOffer(rawOfferUrl)
   const preAuthGrant = offer.grants[PRE_AUTH_GRANT_TYPE]
   if (!preAuthGrant) {
     throw new Error('Only pre-authorized code grants are supported in V1')
+  }
+  if (preAuthGrant.tx_code && !params.txCode) {
+    throw new Error('Offer requires a tx_code (PIN) — pass `txCode` to acceptCredentialOffer')
   }
   const credentialConfigurationId = offer.credential_configuration_ids[0]
   if (!credentialConfigurationId) {
@@ -181,7 +218,11 @@ export async function acceptCredentialOffer(rawOfferUrl: string): Promise<Stored
   const tokenEndpoint =
     metadata.token_endpoint ??
     `${offer.credential_issuer.replace(/\/+$/, '')}/v1/credential/token`
-  const tokenResp = await requestToken(tokenEndpoint, preAuthGrant['pre-authorized_code'])
+  const tokenResp = await requestToken(tokenEndpoint, {
+    preAuthorizedCode: preAuthGrant['pre-authorized_code'],
+    txCode: params.txCode,
+    audience: offer.credential_issuer,
+  })
   if (!tokenResp.c_nonce) {
     throw new Error('Token response did not include c_nonce')
   }
