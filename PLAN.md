@@ -113,10 +113,39 @@ The wallet code (`src/lib/oid4vci.ts` + `src/lib/proof-jwt.ts`) follows the
 same recipe, so the browser path should succeed identically. Outstanding:
 manual UI smoke test once the Vercel deploy lands.
 
-**OID4VP half: NOT YET VALIDATED** end-to-end. Code is in place
-(`src/lib/oid4vp.ts buildAndPostPresentation`) but not exercised against
-the verifier. Risk: CBOR round-trip of filtered `IssuerSignedItem` (see
-README §Known gaps).
+**OID4VP half: PARTIAL — 400 on DeviceAuth verify 2026-05-13.** Smoke
+test wired against staging (`profile=eu_av_blueprint`, `direct_post`).
+Verifier reaches the mdoc path, parses `vp_token`, finds the session
+(state echo OK, format `mso_mdoc`). Rejects with:
+
+```
+{"status":"credential_invalid","message":"Device signature must be valid: undefined","format":"mso_mdoc"}
+```
+
+The presentation makes it all the way to `Verifier.verifyDeviceResponse`
+on the Tessaliq side; only the COSE_Sign1 over `DeviceAuthentication`
+fails. Candidates to investigate next:
+
+1. **SessionTranscript binding** — wallet uses `SessionTranscript.forOid4Vp`
+   with the 4-tuple `(clientId, nonce, jwkThumbprint=null, responseUri)`.
+   Tessaliq for `eu_av_blueprint` rewrites `clientId` to
+   `redirect_uri:<response_uri>` — our wallet uses the value verbatim
+   from the JAR (`req.client_id`), which is already the rewritten form,
+   so this should match. Worth checking with byte-level diff.
+2. **`IssuerSignedItem` CBOR round-trip** — we call
+   `IssuerSigned.create({issuerNamespaces:..., issuerAuth: original.issuerAuth})`,
+   relying on `@owf/mdoc` to re-emit byte-identical items. If the
+   re-emission shifts even one byte, MSO digests no longer match. Cheap
+   fix: ship the unfiltered `IssuerSigned`, let the verifier ignore
+   extra claims (no selective disclosure but the auth signature is
+   over the original bytes).
+3. **Self-signed cert in `x5chain`** — verifier might check basic
+   constraints / not-before / not-after. We emit valid 10-year P-256
+   ECDSA SHA-256 self-signed; should be fine.
+
+Default branch is option (2): drop the filter for the next smoke pass
+and confirm the signature alone is the blocker. If green, MSO encoding
+is the root cause; if still red, look at SessionTranscript.
 
 - [ ] Reproducible E2E test scenario:
   1. Trigger a verifier session on Tessaliq → wallet presents the user's PID France Identité (simulated) → Tessaliq issues a derived AV credential offer
