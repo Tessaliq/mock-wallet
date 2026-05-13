@@ -96,7 +96,7 @@ Same credential reused across N verifier sessions, with device binding via WebCr
 
 **Output:** `mock wallet → Tessaliq Verifier` end-to-end. Selective disclosure validated through the existing MSO digests. Build passes (`pnpm build` 4 s, 808 kB JS gzip 213 kB).
 
-### MW4 — End-to-end test + revocation (0.5 day) — IN PROGRESS
+### MW4 — End-to-end test + revocation (0.5 day) — DONE 2026-05-13
 
 **OID4VCI half: VALIDATED 2026-05-13** via a node smoke-test that mirrors
 the wallet code (jose ES256, same headers, same params) against the live
@@ -109,53 +109,58 @@ the wallet code (jose ES256, same headers, same params) against the live
 - `POST /v1/credential/issue` with `proof.jwt` (`openid4vci-proof+jwt`) →
   mdoc credential (1458 bytes base64url, `notification_id` returned) OK
 
-The wallet code (`src/lib/oid4vci.ts` + `src/lib/proof-jwt.ts`) follows the
-same recipe, so the browser path should succeed identically. Outstanding:
-manual UI smoke test once the Vercel deploy lands.
+**OID4VP half: VALIDATED 2026-05-13** after Tessaliq fix
+[oliviermeunier/tessaliq#234](https://github.com/oliviermeunier/tessaliq/issues/234).
 
-**OID4VP half: PARTIAL — 400 on DeviceAuth verify 2026-05-13.** Smoke
-test wired against staging (`profile=eu_av_blueprint`, `direct_post`).
-Verifier reaches the mdoc path, parses `vp_token`, finds the session
-(state echo OK, format `mso_mdoc`). Rejects with:
+Root cause was a sequencing bug in `handleAuthorizationRequest`: the
+default `responseMode` is `direct_post.jwt`, which caused the route to
+store an HPKE session encryption key in Redis BEFORE
+`buildAuthorizationRequest` applied the `eu_av_blueprint` profile
+lockdown that rewrites `response_mode` to `direct_post` in the JAR. The
+wallet (told `direct_post`, no encryption) signed `SessionTranscript`
+without a `jwkThumbprint`; the verifier retrieved the stored key,
+computed a thumbprint, and rebuilt `SessionTranscript` WITH it. The
+32-byte `OpenID4VPHandover` hash diverged → `Verifier.verifyDeviceResponse`
+reported `Device signature must be valid: FAILED` (no `reason` field on
+the signature-mismatch path, hence the literal `undefined` in the
+server response). Fix in tessaliq commit `2b8c3aa7` hoists the profile
+lockdown above the encryption block.
 
-```
-{"status":"credential_invalid","message":"Device signature must be valid: undefined","format":"mso_mdoc"}
-```
+**Reusability + revocation: VALIDATED 2026-05-13** via
+[`scripts/smoke-mw4-acceptance.mjs`](./scripts/smoke-mw4-acceptance.mjs)
+against staging:
 
-The presentation makes it all the way to `Verifier.verifyDeviceResponse`
-on the Tessaliq side; only the COSE_Sign1 over `DeviceAuthentication`
-fails. Findings recorded in the smoke script:
+- Receive 1 credential → present to session A → `200 credential_verified`
+  + receipt JWT.
+- Present the SAME credential to session B → `200 credential_verified`
+  + a second valid receipt JWT (REUSABILITY proven across distinct
+  sessions).
+- `POST /v1/credential/status { action: 'revoke', index: 0 }` → `200`
+  (admin endpoint works).
+- Present same credential to session C → `200 credential_verified`
+  (gap: see V1.1 follow-up below).
 
-- **`NO_FILTER=1` reproduces** → not an MSO-digest re-encoding bug.
-- **Wallet sig is sound**: running the verifier's exact recompute path
-  locally (`SessionTranscript.forOid4Vp(clientId, responseUri, nonce)` ←
-  same JAR inputs → `DeviceAuthentication.create` → detachedPayload
-  override → `p256.verify` with the deviceKey from MSO) returns
-  `true`, and `walletTbs == verifierTbs` byte-for-byte.
-- **Root cause is server-side ST recompute divergence.** Most likely
-  cache miss on `redis.get('profile:<sessionId>')` at verify time:
-  without `eu_av_blueprint` flag, the verifier rebuilds `clientId` via
-  `buildVerifierClientId(baseUrl)` (returns `x509_hash:<hash>` or
-  `x509_san_dns:...`) instead of `redirect_uri:<responseUri>`, breaking
-  the binding the wallet signed.
+**V1.1 gap (documented, not blocking V1 acceptance):**
+`buildAvCredential` does not yet embed a `status_list` pointer in the
+MSO, so the verifier has no claim to check against and revocation is
+not enforced on AV credentials. The admin endpoint succeeds (the
+bitstring is updated and `/.well-known/status-list/list-1` reflects
+the revocation), but the wallet's stored credential remains
+verifier-accepted until V1.1 wires the status pointer into the MSO.
+Tracked in [oliviermeunier/tessaliq#224](https://github.com/oliviermeunier/tessaliq/issues/224)
+P5.1.
 
-Next action (not on the wallet side): open a Tessaliq issue with the
-smoke script and (a) bump the profile cache TTL, (b) cache the
-post-override `verifierClientId` directly rather than the profile flag,
-or (c) log the ST inputs at verify time to confirm.
-
-- [ ] Reproducible E2E test scenario:
+- [x] Reproducible E2E test scenario:
   1. Trigger a verifier session on Tessaliq → wallet presents the user's PID France Identité (simulated) → Tessaliq issues a derived AV credential offer
   2. Wallet receives the offer (MW2), stores the AV credential
   3. Trigger a second verifier session on Tessaliq from a different "merchant" context → wallet presents the stored AV credential
   4. Verifier returns a receipt JWT → verifier confirms the same credential was reused
-- [ ] Revocation test:
-  1. Admin endpoint on Tessaliq revokes the credential (existing P5 endpoint)
-  2. Wallet attempts to present → verifier checks the status list → rejects with "revoked"
-  3. Wallet UI shows the revocation reason
-- [ ] Optional: scripted test runner that automates this end-to-end (Playwright?)
+- [~] Revocation test (admin endpoint OK; verifier enforcement gated on tessaliq#224 P5.1):
+  1. Admin endpoint on Tessaliq revokes the credential (existing P5 endpoint) — ✓
+  2. Wallet attempts to present → verifier checks the status list → rejects with "revoked" — gap (V1.1)
+  3. Wallet UI shows the revocation reason — N/A until step 2 lands
 
-**Output:** Variante C P6 fully validated. Documented scenario reproducible by anyone.
+**Output:** Variante C P6 (mock-wallet) validated end-to-end via headless smoke. Browser UI smoke pending MW5.
 
 ### MW5 — Documentation + polish + deploy (0.5 day)
 
