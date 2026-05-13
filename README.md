@@ -25,8 +25,7 @@ It is not a replacement for a national EUDI Wallet. It is a development tool for
 - OpenID4VP 1.0 Final — `direct_post` response mode
 - WebCrypto device key (P-256 ECDSA, non-extractable, persistent across sessions)
 - IndexedDB credential storage
-- Reusable credential presentation across multiple verifiers
-- Token status list revocation check (IETF draft-14)
+- Reusable AV credential — same credential presented to multiple verifier sessions (the strategic story this repo exists for, see [Tessaliq #224](https://github.com/oliviermeunier/tessaliq/issues/224))
 
 **Not supported (V1):**
 - SD-JWT-VC credentials
@@ -34,6 +33,7 @@ It is not a replacement for a national EUDI Wallet. It is a development tool for
 - iOS native app (PWA only)
 - Production-grade hardening, secure enclave, ENISA certification
 - Cross-device sync, backup/restore
+- Revocation enforcement on stored credentials — admin endpoint works, but the mdoc MSO does not yet carry a status pointer (V1.1 follow-up, [Tessaliq #224](https://github.com/oliviermeunier/tessaliq/issues/224) P5.1)
 
 ## Running it
 
@@ -44,11 +44,20 @@ pnpm dev
 
 Then open `http://localhost:5173`.
 
-## Architecture
+## Documentation
 
-PWA built with Vite + React + TypeScript. Hosted at `https://wallet-demo.tessaliq.com` (or run locally for development).
+| Doc | When to read |
+|-----|--------------|
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | Component map, module responsibilities, data layout |
+| [`docs/FLOWS.md`](./docs/FLOWS.md) | OID4VCI + OID4VP sequence diagrams, byte-level wire format, `SessionTranscript` mechanics |
+| [`docs/CRYPTO.md`](./docs/CRYPTO.md) | Device key handling, signing pipeline, security gaps vs production wallets |
+| [`docs/DEBUGGING.md`](./docs/DEBUGGING.md) | Smoke scripts, common verifier 400s, how to read mdoc CBOR + server logs |
+| [`docs/E2E.md`](./docs/E2E.md) | Manual end-to-end scenario against staging |
+| [`PLAN.md`](./PLAN.md) | Implementation plan, phase status, decisions log |
 
-See [`PLAN.md`](./PLAN.md) for the implementation plan and decisions log.
+## Architecture (in one line)
+
+PWA built with Vite + React + TypeScript. No backend of its own — everything happens in the browser against the Tessaliq issuer + verifier endpoints. See [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) for the full picture.
 
 ## Related projects
 
