@@ -162,18 +162,21 @@ P5.1.
 
 **Output:** Variante C P6 (mock-wallet) validated end-to-end via headless smoke. Browser UI smoke pending MW5.
 
-### MW5 — Documentation + polish + deploy (0.5 day)
+### MW5 — Documentation + polish + deploy (0.5 day) — DONE 2026-05-13 (screenshots TBD)
 
-- [ ] Complete `README.md` with screenshots and full quick-start
-- [ ] Document the E2E test scenario in `docs/E2E.md`
-- [ ] Add a CONTRIBUTING.md
-- [ ] Set up GitHub Actions: lint + typecheck + build
-- [ ] Final deploy to `wallet-demo.tessaliq.com`
-- [ ] Update memories on the Tessaliq side (mark Variante C P6 as validated via mock wallet)
-- [ ] Update Tessaliq `feature-matrix.md` and `src/CLAUDE.md`
-- [ ] Update `project_variante_c_issuer_av` memory
+- [~] Complete `README.md` with screenshots and full quick-start — README updated (doc index, scope clarified, Reusable AV terminology, V1.1 gap noted) ; **screenshots TBD** — needs browser session, will land when the UI stabilises after MW5
+- [x] Document the E2E test scenario in `docs/E2E.md` — done in MW4
+- [x] Add a CONTRIBUTING.md — covers scope (in/out), issue/PR norms, best-effort SLA, MIT, conduct
+- [x] Set up GitHub Actions: lint + typecheck + build — `.github/workflows/ci.yml` runs typecheck + build on push/PR (no lint, ESLint config not yet defined)
+- [x] Final deploy to `wallet-demo.tessaliq.com` — Vercel auto-deploys on push to main
+- [x] Update memories on the Tessaliq side — Variante C → Reusable AV rename, P6 marked done, gap V1.1 noted, #234 fix referenced
+- [x] Update Tessaliq `feature-matrix.md` and `src/CLAUDE.md` — both reflect "Reusable AV (ex-Variante C)" + mock-wallet validation
+- [x] Update `project_variante_c_issuer_av` memory — renamed to `project_reusable_av`, old file kept as deprecated alias pointer
 
-**Output:** repo ready for public visibility, P6 marked done on Tessaliq side.
+Plus delivered in MW5 beyond the original list:
+- 4 technical docs added: `docs/ARCHITECTURE.md`, `docs/FLOWS.md`, `docs/CRYPTO.md`, `docs/DEBUGGING.md` (~830 lines, mermaid sequence diagrams, threat model, debugging recipes)
+
+**Output:** repo ready for public visibility, P6 marked done on Tessaliq side, doc-rich enough for an external contributor to onboard. Screenshots remain a follow-up.
 
 ## Effort total
 
