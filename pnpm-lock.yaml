@@ -27,6 +27,12 @@ importers:
         specifier: ^19.0.0
         version: 19.2.6(react@19.2.6)
     devDependencies:
+      '@noble/curves':
+        specifier: ^1.0.0
+        version: 1.9.7
+      '@noble/hashes':
+        specifier: ^1.0.0
+        version: 1.8.0
       '@types/react':
         specifier: ^19.0.0
         version: 19.2.14
@@ -848,6 +854,14 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@noble/curves@1.9.7':
+    resolution: {integrity: sha512-gbKGcRUYIjA3/zCCNaWDciTMFI0dCkvou3TL8Zmy5Nc7sJ47a0jtOeZoTaMxkuqRo9cRhjOdZJXegxYE5FN/xw==}
+    engines: {node: ^14.21.3 || >=16}
+
+  '@noble/hashes@1.8.0':
+    resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
+    engines: {node: ^14.21.3 || >=16}
 
   '@owf/mdoc@0.6.0':
     resolution: {integrity: sha512-vJL62hzjcSweBjDD9eRUH1RIMSzZUtHKjVFMMo50oHPLO9ZVZbQABFe9IFoa5AgXkwfv27HjnFv/eRbkOrlsUA==}
@@ -3206,6 +3220,12 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  '@noble/curves@1.9.7':
+    dependencies:
+      '@noble/hashes': 1.8.0
+
+  '@noble/hashes@1.8.0': {}
 
   '@owf/mdoc@0.6.0':
     dependencies:

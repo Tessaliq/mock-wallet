@@ -24,14 +24,18 @@ import {
 import {
   CoseKey,
   Document,
+  DeviceAuthentication,
   DeviceResponse,
   DeviceSignedBuilder,
   IssuerNamespaces,
   IssuerSigned,
   SessionTranscript,
   SignatureAlgorithm,
+  Verifier,
   base64url,
 } from '@owf/mdoc'
+import { p256 } from '@noble/curves/p256'
+import { sha256 } from '@noble/hashes/sha256'
 import * as x509 from '@peculiar/x509'
 
 const STAGING = 'https://api-staging.tessaliq.com'
@@ -118,7 +122,7 @@ async function half2Present(credentialB64, privateKey, publicKey, jwk) {
     body: JSON.stringify({ useCase: 'age_verification_18_plus', jurisdiction: 'FR' }),
   })
   const session = await sessionRes.json()
-  const linkRes = await fetch(`${STAGING}/v1/openid4vp/link/${session.id}?profile=eu_av_blueprint`)
+  const linkRes = await fetch(`${STAGING}/v1/openid4vp/link/${session.id}?response_mode=direct_post`)
   const link = await linkRes.json()
 
   // Parse the deep_link query.
@@ -205,6 +209,46 @@ async function half2Present(credentialB64, privateKey, publicKey, jwk) {
   const vpToken = JSON.stringify({ [dcqlId]: encoded })
   const formBody = new URLSearchParams({ vp_token: vpToken })
   if (req.state) formBody.set('state', req.state)
+
+  // Local sanity: simulate the verifier's exact recompute path.
+  // Rebuild SessionTranscript from JAR inputs, rebuild
+  // DeviceAuthentication from the wire doc, then overwrite the detached
+  // payload before verifying — this is exactly what
+  // `Verifier.verifyDeviceResponse` does internally.
+  {
+    const verifierTranscript = await SessionTranscript.forOid4Vp({
+      clientId: req.client_id,
+      responseUri: req.response_uri,
+      nonce: req.nonce,
+    }, ctx)
+    const doc = deviceResponse.documents[0]
+    const verifierDeviceAuthBytes = DeviceAuthentication.create({
+      sessionTranscript: verifierTranscript,
+      docType: doc.docType,
+      deviceNamespaces: doc.deviceSigned.deviceNamespaces,
+    }).encode({ asDataItem: true })
+
+    const sign1 = doc.deviceSigned.deviceAuth.deviceSignature
+    const walletTbs = sign1.toBeSigned
+
+    // Recompute what the toBeSigned WOULD be if we substituted the verifier's
+    // deviceAuthenticationBytes for the detached payload.
+    sign1.detachedPayload = verifierDeviceAuthBytes
+    const verifierTbs = sign1.toBeSigned
+
+    const sig = sign1.signature
+    const deviceKey = doc.issuerSigned.issuerAuth.mobileSecurityObject.deviceKeyInfo.deviceKey
+    const { x, y } = { x: deviceKey.x, y: deviceKey.y }
+    const pub = new Uint8Array(1 + x.length + y.length)
+    pub[0] = 0x04; pub.set(x, 1); pub.set(y, 1 + x.length)
+    const ok = p256.verify(sig, sha256(verifierTbs), pub)
+    console.log('half2 LOCAL verify (verifier recompute) — p256.verify:', ok)
+    console.log('half2 walletTbs == verifierTbs?', Buffer.from(walletTbs).equals(Buffer.from(verifierTbs)))
+    if (!Buffer.from(walletTbs).equals(Buffer.from(verifierTbs))) {
+      console.log('  walletTbs len:', walletTbs.length, 'hex:', Buffer.from(walletTbs).toString('hex'))
+      console.log('  verifierTbs len:', verifierTbs.length, 'hex:', Buffer.from(verifierTbs).toString('hex'))
+    }
+  }
 
   const responseUri = req.response_uri + '?details=1'
   console.log('half2 posting to', responseUri)

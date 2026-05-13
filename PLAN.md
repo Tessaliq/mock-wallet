@@ -124,28 +124,25 @@ Verifier reaches the mdoc path, parses `vp_token`, finds the session
 
 The presentation makes it all the way to `Verifier.verifyDeviceResponse`
 on the Tessaliq side; only the COSE_Sign1 over `DeviceAuthentication`
-fails. Candidates to investigate next:
+fails. Findings recorded in the smoke script:
 
-1. **SessionTranscript binding** — wallet uses `SessionTranscript.forOid4Vp`
-   with the 4-tuple `(clientId, nonce, jwkThumbprint=null, responseUri)`.
-   Tessaliq for `eu_av_blueprint` rewrites `clientId` to
-   `redirect_uri:<response_uri>` — our wallet uses the value verbatim
-   from the JAR (`req.client_id`), which is already the rewritten form,
-   so this should match. Worth checking with byte-level diff.
-2. **`IssuerSignedItem` CBOR round-trip** — we call
-   `IssuerSigned.create({issuerNamespaces:..., issuerAuth: original.issuerAuth})`,
-   relying on `@owf/mdoc` to re-emit byte-identical items. If the
-   re-emission shifts even one byte, MSO digests no longer match. Cheap
-   fix: ship the unfiltered `IssuerSigned`, let the verifier ignore
-   extra claims (no selective disclosure but the auth signature is
-   over the original bytes).
-3. **Self-signed cert in `x5chain`** — verifier might check basic
-   constraints / not-before / not-after. We emit valid 10-year P-256
-   ECDSA SHA-256 self-signed; should be fine.
+- **`NO_FILTER=1` reproduces** → not an MSO-digest re-encoding bug.
+- **Wallet sig is sound**: running the verifier's exact recompute path
+  locally (`SessionTranscript.forOid4Vp(clientId, responseUri, nonce)` ←
+  same JAR inputs → `DeviceAuthentication.create` → detachedPayload
+  override → `p256.verify` with the deviceKey from MSO) returns
+  `true`, and `walletTbs == verifierTbs` byte-for-byte.
+- **Root cause is server-side ST recompute divergence.** Most likely
+  cache miss on `redis.get('profile:<sessionId>')` at verify time:
+  without `eu_av_blueprint` flag, the verifier rebuilds `clientId` via
+  `buildVerifierClientId(baseUrl)` (returns `x509_hash:<hash>` or
+  `x509_san_dns:...`) instead of `redirect_uri:<responseUri>`, breaking
+  the binding the wallet signed.
 
-Default branch is option (2): drop the filter for the next smoke pass
-and confirm the signature alone is the blocker. If green, MSO encoding
-is the root cause; if still red, look at SessionTranscript.
+Next action (not on the wallet side): open a Tessaliq issue with the
+smoke script and (a) bump the profile cache TTL, (b) cache the
+post-override `verifierClientId` directly rather than the profile flag,
+or (c) log the ST inputs at verify time to confirm.
 
 - [ ] Reproducible E2E test scenario:
   1. Trigger a verifier session on Tessaliq → wallet presents the user's PID France Identité (simulated) → Tessaliq issues a derived AV credential offer
