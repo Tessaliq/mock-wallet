@@ -122,7 +122,7 @@ async function half2Present(credentialB64, privateKey, publicKey, jwk) {
     body: JSON.stringify({ useCase: 'age_verification_18_plus', jurisdiction: 'FR' }),
   })
   const session = await sessionRes.json()
-  const linkRes = await fetch(`${STAGING}/v1/openid4vp/link/${session.id}?response_mode=direct_post`)
+  const linkRes = await fetch(`${STAGING}/v1/openid4vp/link/${session.id}?profile=eu_av_blueprint`)
   const link = await linkRes.json()
 
   // Parse the deep_link query.
@@ -167,10 +167,14 @@ async function half2Present(credentialB64, privateKey, publicKey, jwk) {
   const issuerSignedFull = IssuerSigned.fromEncodedForOid4Vci(credentialB64)
   const namespace = issuerSignedFull.issuerNamespaces.issuerNamespaces.keys().next().value
   const mso = issuerSignedFull.issuerAuth.mobileSecurityObject
+  const msoKey = mso.deviceKeyInfo.deviceKey
   console.log('half2 MSO:', {
     docType: mso.docType,
     namespace,
-    deviceKeyAlg: mso.deviceKeyInfo.deviceKey?.algorithm,
+    deviceKeyAlg: msoKey?.algorithm,
+    msoKeyX: msoKey?.x ? Buffer.from(msoKey.x).toString('hex').slice(0, 16) + '…' : null,
+    walletKeyX: Buffer.from(Buffer.from(jwk.x, 'base64url')).toString('hex').slice(0, 16) + '…',
+    keysMatch: msoKey?.x && Buffer.from(msoKey.x).equals(Buffer.from(jwk.x, 'base64url')),
   })
   const items = issuerSignedFull.getIssuerNamespace(namespace) ?? []
   // DCQL claims path is [namespace, claimName] for mdoc. Pick what the verifier asked for.
