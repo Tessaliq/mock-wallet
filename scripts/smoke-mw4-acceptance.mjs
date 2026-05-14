@@ -161,13 +161,26 @@ async function presentToVerifier(credentialB64, privateKey, publicKey, jwk, labe
   }
 }
 
-async function revokeCredential(index, listId) {
+async function revokeCredential({ index, fingerprint, listId }) {
+  const body = { list_id: listId, action: 'revoke' }
+  if (typeof index === 'number') body.index = index
+  if (fingerprint) body.fingerprint = fingerprint
   const res = await fetch(`${STAGING}/v1/credential/status`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ index, list_id: listId, action: 'revoke' }),
+    body: JSON.stringify(body),
   })
   return { status: res.status, body: await res.text() }
+}
+
+// P5.1 — compute the Tessaliq fingerprint for an emitted credential.
+// Mirror of `extractFingerprint` from packages/api/src/lib/issuer.ts :
+//   fingerprint = sha256(IssuerAuth.signature)
+async function computeFingerprintHex(credentialB64) {
+  const issuerSigned = IssuerSigned.fromEncodedForOid4Vci(credentialB64)
+  const sig = issuerSigned.issuerAuth.signature
+  const digest = await crypto.subtle.digest('SHA-256', sig.buffer.slice(sig.byteOffset, sig.byteOffset + sig.byteLength))
+  return Buffer.from(new Uint8Array(digest)).toString('hex')
 }
 
 async function main() {
@@ -193,29 +206,33 @@ async function main() {
     ? '   ✓ REUSABILITY: same credential accepted across 2 distinct sessions with 2 valid receipts'
     : '   ✗ REUSABILITY FAILED: sessions accepted A=' + a.verifyStatus + ' B=' + b.verifyStatus)
 
-  console.log('\n=== MW4 acceptance: revocation ===')
-  console.log('NOTE: buildAvCredential does NOT yet embed a status_list reference in the MSO')
-  console.log('  (Tessaliq #224 — V1 limitation, wire-up is V1.1). The admin endpoint')
-  console.log('  succeeds, but the verifier does not enforce revocation on AV credentials.')
-  console.log('  This script demonstrates that the admin endpoint works and documents the gap.')
+  console.log('\n=== MW4 acceptance: revocation (P5.1 enforcement) ===')
+  console.log('Since P5.1 (2026-05-14), the Tessaliq verifier enforces credential')
+  console.log('revocation server-side via PG-backed fingerprint→idx mapping. The')
+  console.log('credential MSO does NOT yet embed a status pointer (V2), so the')
+  console.log('enforcement is Tessaliq-verifier-only — third-party verifiers will')
+  console.log('not honor revocations until the MSO wire-up lands.')
 
-  console.log('4. Revoke index 0 of the default status list via /v1/credential/status...')
-  const revokeRes = await revokeCredential(0, 'list-1')
+  const fingerprintHex = await computeFingerprintHex(credentialB64)
+  console.log('4. Revoke via /v1/credential/status with fingerprint =', fingerprintHex.slice(0, 16) + '…')
+  const revokeRes = await revokeCredential({ fingerprint: fingerprintHex, listId: 'issuer-list-1' })
   console.log('   revoke:', revokeRes.status, revokeRes.body.slice(0, 200))
 
-  console.log('5. Present the same credential AGAIN (session C)...')
+  console.log('5. Present the same credential AGAIN (session C) — expect rejection...')
   const c = await presentToVerifier(credentialB64, privateKey, publicKey, jwk, 'C')
-  if (c.verifyStatus === 200) {
-    console.log('   △ EXPECTED V1 GAP: presentation accepted after revocation — credential MSO carries no status pointer')
-    console.log('   → Closes when V1.1 wires status_list into buildAvCredential MSO')
+  const revocationEnforced = c.verifyStatus !== 200 && c.verifyBody.includes('credential_revoked')
+  if (revocationEnforced) {
+    console.log('   ✓ REVOCATION ENFORCED: verify status', c.verifyStatus, '— error: credential_revoked')
   } else {
-    console.log('   ✓ revocation enforced: verify status', c.verifyStatus)
+    console.log('   ✗ REVOCATION NOT ENFORCED: verify status', c.verifyStatus)
+    console.log('     body excerpt:', c.verifyBody.slice(0, 200))
   }
 
   console.log('\n=== Summary ===')
   console.log('Reusability:', reuseOk ? 'PASS' : 'FAIL')
-  console.log('Revocation: admin endpoint', revokeRes.status === 200 ? 'OK' : 'FAIL', '; verifier enforcement: V1.1 (gap documented)')
-  process.exit(reuseOk ? 0 : 1)
+  console.log('Revocation:  admin endpoint', revokeRes.status === 200 ? 'OK' : 'FAIL',
+    '; verifier enforcement', revocationEnforced ? 'PASS' : 'FAIL')
+  process.exit(reuseOk && revocationEnforced ? 0 : 1)
 }
 
 main().catch(e => { console.error('FAIL:', e); process.exit(1) })
